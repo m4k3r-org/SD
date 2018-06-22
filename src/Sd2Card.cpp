@@ -17,95 +17,23 @@
  * along with the Arduino Sd2Card Library.  If not, see
  * <http://www.gnu.org/licenses/>.
  */
-#define USE_SPI_LIB
 #include <Arduino.h>
 #include "Sd2Card.h"
 //------------------------------------------------------------------------------
-#ifndef SOFTWARE_SPI
-#ifdef USE_SPI_LIB
-
-#ifndef SDCARD_SPI
 #define SDCARD_SPI SPI
-#endif
 
 #include <SPI.h>
 static SPISettings settings;
-#endif
+
 // functions for hardware SPI
 /** Send a byte to the card */
 static void spiSend(uint8_t b) {
-#ifndef USE_SPI_LIB
-  SPDR = b;
-  while (!(SPSR & (1 << SPIF)))
-    ;
-#else
   SDCARD_SPI.transfer(b);
-#endif
 }
 /** Receive a byte from the card */
 static  uint8_t spiRec(void) {
-#ifndef USE_SPI_LIB
-  spiSend(0XFF);
-  return SPDR;
-#else
   return SDCARD_SPI.transfer(0xFF);
-#endif
 }
-#else  // SOFTWARE_SPI
-//------------------------------------------------------------------------------
-/** nop to tune soft SPI timing */
-#define nop asm volatile ("nop\n\t")
-//------------------------------------------------------------------------------
-/** Soft SPI receive */
-uint8_t spiRec(void) {
-  uint8_t data = 0;
-  // no interrupts during byte receive - about 8 us
-  cli();
-  // output pin high - like sending 0XFF
-  fastDigitalWrite(SPI_MOSI_PIN, HIGH);
-
-  for (uint8_t i = 0; i < 8; i++) {
-    fastDigitalWrite(SPI_SCK_PIN, HIGH);
-
-    // adjust so SCK is nice
-    nop;
-    nop;
-
-    data <<= 1;
-
-    if (fastDigitalRead(SPI_MISO_PIN)) data |= 1;
-
-    fastDigitalWrite(SPI_SCK_PIN, LOW);
-  }
-  // enable interrupts
-  sei();
-  return data;
-}
-//------------------------------------------------------------------------------
-/** Soft SPI send */
-void spiSend(uint8_t data) {
-  // no interrupts during byte send - about 8 us
-  cli();
-  for (uint8_t i = 0; i < 8; i++) {
-    fastDigitalWrite(SPI_SCK_PIN, LOW);
-
-    fastDigitalWrite(SPI_MOSI_PIN, data & 0X80);
-
-    data <<= 1;
-
-    fastDigitalWrite(SPI_SCK_PIN, HIGH);
-  }
-  // hold SCK high for a few ns
-  nop;
-  nop;
-  nop;
-  nop;
-
-  fastDigitalWrite(SPI_SCK_PIN, LOW);
-  // enable interrupts
-  sei();
-}
-#endif  // SOFTWARE_SPI
 //------------------------------------------------------------------------------
 // send command and return error code.  Return zero for OK
 uint8_t Sd2Card::cardCommand(uint8_t cmd, uint32_t arg) {
