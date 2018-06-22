@@ -1,3 +1,13 @@
+= SD Light library for Arduino =
+
+This is a rewrite by https://github.com/rizsi of the original Arduino library to only have the essential functions to read/write SD cards and use less SRAM. (Uses almost 0 SRAM bytes.)
+
+Most of the functions are removed this version only reads/writes blocks of the SD card.
+
+See https://github.com/arduino-libraries/SD for the original version.
+
+Original README:
+
 = SD Library for Arduino =
 
 The SD library allows for reading from and writing to SD cards.

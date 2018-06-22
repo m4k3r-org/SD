@@ -173,7 +173,6 @@ uint8_t Sd2Card::eraseSingleBlockEnable(void) {
  * can be determined by calling errorCode() and errorData().
  */
 uint8_t Sd2Card::init(uint8_t sckRateID, uint8_t chipSelectPin) {
-Serial.println("Yeah");
   errorCode_ = inBlock_ = partialBlockRead_ = type_ = 0;
   chipSelectPin_ = chipSelectPin;
   // 16-bit init start time allows over a minute
@@ -331,31 +330,6 @@ uint8_t Sd2Card::readData(uint32_t block,
     inBlock_ = 1;
   }
 
-#ifdef OPTIMIZE_HARDWARE_SPI
-  // start first spi transfer
-  SPDR = 0XFF;
-
-  // skip data before offset
-  for (;offset_ < offset; offset_++) {
-    while (!(SPSR & (1 << SPIF)))
-      ;
-    SPDR = 0XFF;
-  }
-  // transfer data
-  n = count - 1;
-  for (uint16_t i = 0; i < n; i++) {
-    while (!(SPSR & (1 << SPIF)))
-      ;
-    dst[i] = SPDR;
-    SPDR = 0XFF;
-  }
-  // wait for last byte
-  while (!(SPSR & (1 << SPIF)))
-    ;
-  dst[n] = SPDR;
-
-#else  // OPTIMIZE_HARDWARE_SPI
-
   // skip data before offset
   for (;offset_ < offset; offset_++) {
     spiRec();
@@ -364,9 +338,51 @@ uint8_t Sd2Card::readData(uint32_t block,
   for (uint16_t i = 0; i < count; i++) {
     dst[i] = spiRec();
   }
-#endif  // OPTIMIZE_HARDWARE_SPI
 
   offset_ += count;
+  if (!partialBlockRead_ || offset_ >= 512) {
+    // read rest of data, checksum and set chip select high
+    readEnd();
+  }
+  return true;
+
+ fail:
+  chipSelectHigh();
+  return false;
+}
+
+/**
+ * Read an 512 byte block from an SD card.
+ *
+ * \param[in] block Logical block to be read.
+ * \param[im] writer callback function to process the data received
+ * \param[im] param parameter passed to writer callback
+  * \return The value one, true, is returned for success and
+ * the value zero, false, is returned for failure.
+ */
+uint8_t Sd2Card::readBlock(uint32_t block,
+        sdBlockWriter writer, void * param) {
+  if (!inBlock_ || block != block_ ) {
+    block_ = block;
+    // use address if not SDHC card
+    if (type()!= SD_CARD_TYPE_SDHC) block <<= 9;
+    if (cardCommand(CMD17, block)) {
+      error(SD_CARD_ERROR_CMD17);
+      goto fail;
+    }
+    if (!waitStartBlock()) {
+      goto fail;
+    }
+    offset_ = 0;
+    inBlock_ = 1;
+  }
+
+  // transfer data
+  for (uint16_t i = 0; i < SD_BLOCK_SIZE; i++) {
+    writer(spiRec(), param);
+  }
+
+  offset_ += SD_BLOCK_SIZE;
   if (!partialBlockRead_ || offset_ >= 512) {
     // read rest of data, checksum and set chip select high
     readEnd();
@@ -513,13 +529,6 @@ uint8_t Sd2Card::waitStartBlock(void) {
  * the value zero, false, is returned for failure.
  */
 uint8_t Sd2Card::writeBlock(uint32_t blockNumber, const uint8_t* src) {
-#if SD_PROTECT_BLOCK_ZERO
-  // don't allow write to first block
-  if (blockNumber == 0) {
-    error(SD_CARD_ERROR_WRITE_BLOCK_ZERO);
-    goto fail;
-  }
-#endif  // SD_PROTECT_BLOCK_ZERO
 
   // use address if not SDHC card
   if (type() != SD_CARD_TYPE_SDHC) blockNumber <<= 9;
@@ -528,6 +537,42 @@ uint8_t Sd2Card::writeBlock(uint32_t blockNumber, const uint8_t* src) {
     goto fail;
   }
   if (!writeData(DATA_START_BLOCK, src)) goto fail;
+
+  // wait for flash programming to complete
+  if (!waitNotBusy(SD_WRITE_TIMEOUT)) {
+    error(SD_CARD_ERROR_WRITE_TIMEOUT);
+    goto fail;
+  }
+  // response is r2 so get and check two bytes for nonzero
+  if (cardCommand(CMD13, 0) || spiRec()) {
+    error(SD_CARD_ERROR_WRITE_PROGRAMMING);
+    goto fail;
+  }
+  chipSelectHigh();
+  return true;
+
+ fail:
+  chipSelectHigh();
+  return false;
+}
+//------------------------------------------------------------------------------
+/**
+ * Writes a 512 byte block to an SD card. ALMA
+ *
+ * \param[in] blockNumber Logical block to be written.
+ * \param[in] reader Function that provides the bytes to write
+ * \return The value one, true, is returned for success and
+ * the value zero, false, is returned for failure.
+ */
+uint8_t Sd2Card::writeBlock(uint32_t blockNumber, sdBlockReader reader, void * param) {
+
+  // use address if not SDHC card
+  if (type() != SD_CARD_TYPE_SDHC) blockNumber <<= 9;
+  if (cardCommand(CMD24, blockNumber)) {
+    error(SD_CARD_ERROR_CMD24);
+    goto fail;
+  }
+  if (!writeData(DATA_START_BLOCK, reader, param)) goto fail;
 
   // wait for flash programming to complete
   if (!waitNotBusy(SD_WRITE_TIMEOUT)) {
@@ -560,31 +605,29 @@ uint8_t Sd2Card::writeData(const uint8_t* src) {
 //------------------------------------------------------------------------------
 // send one block of data for write block or write multiple blocks
 uint8_t Sd2Card::writeData(uint8_t token, const uint8_t* src) {
-#ifdef OPTIMIZE_HARDWARE_SPI
-
-  // send data - optimized loop
-  SPDR = token;
-
-  // send two byte per iteration
-  for (uint16_t i = 0; i < 512; i += 2) {
-    while (!(SPSR & (1 << SPIF)))
-      ;
-    SPDR = src[i];
-    while (!(SPSR & (1 << SPIF)))
-      ;
-    SPDR = src[i+1];
-  }
-
-  // wait for last data byte
-  while (!(SPSR & (1 << SPIF)))
-    ;
-
-#else  // OPTIMIZE_HARDWARE_SPI
   spiSend(token);
   for (uint16_t i = 0; i < 512; i++) {
     spiSend(src[i]);
   }
-#endif  // OPTIMIZE_HARDWARE_SPI
+  spiSend(0xff);  // dummy crc
+  spiSend(0xff);  // dummy crc
+
+  status_ = spiRec();
+  if ((status_ & DATA_RES_MASK) != DATA_RES_ACCEPTED) {
+    error(SD_CARD_ERROR_WRITE);
+    chipSelectHigh();
+    return false;
+  }
+  return true;
+}
+//------------------------------------------------------------------------------
+// send one block of data for write block or write multiple blocks
+uint8_t Sd2Card::writeData(uint8_t token, sdBlockReader reader, void * param) {
+  spiSend(token);
+  for (uint16_t i = 0; i < 512; i++) {
+  	uint8_t data=reader(param);
+    spiSend(data);
+  }
   spiSend(0xff);  // dummy crc
   spiSend(0xff);  // dummy crc
 
@@ -609,13 +652,6 @@ uint8_t Sd2Card::writeData(uint8_t token, const uint8_t* src) {
  * the value zero, false, is returned for failure.
  */
 uint8_t Sd2Card::writeStart(uint32_t blockNumber, uint32_t eraseCount) {
-#if SD_PROTECT_BLOCK_ZERO
-  // don't allow write to first block
-  if (blockNumber == 0) {
-    error(SD_CARD_ERROR_WRITE_BLOCK_ZERO);
-    goto fail;
-  }
-#endif  // SD_PROTECT_BLOCK_ZERO
   // send pre-erase count
   if (cardAcmd(ACMD23, eraseCount)) {
     error(SD_CARD_ERROR_ACMD23);

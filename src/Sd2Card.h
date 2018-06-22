@@ -19,6 +19,7 @@
  */
 #ifndef Sd2Card_h
 #define Sd2Card_h
+
 /**
  * \file
  * Sd2Card class
@@ -30,6 +31,8 @@
 #define SPI_HALF_SPEED 1
 /** Set SCK rate to F_CPU/8. Sd2Card::setSckRate(). */
 #define SPI_QUARTER_SPEED 2;
+
+#define SD_BLOCK_SIZE 512
 /**
  * USE_SPI_LIB: if set, use the SPI library bundled with Arduino IDE, otherwise
  * run with a standalone driver for AVR.
@@ -39,9 +42,21 @@
 // include pins_arduino.h or variant.h depending on architecture, via Arduino.h
 #include <Arduino.h>
 
+
+/**
+ * Get the next byte of the block.
+ * @param param user defined parameter object that was passed to writeBlock.
+ */
+typedef uint8_t (*sdBlockReader) (void * param);
+
+/**
+ * The next byte read from the block.
+ * @param param user defined parameter object that was passed to writeBlock.
+ * @param data the data read from the SD card block
+ */
+typedef void (*sdBlockWriter) (uint8_t data, void * param);
+
 //------------------------------------------------------------------------------
-/** Protect block zero from write if nonzero */
-#define SD_PROTECT_BLOCK_ZERO 1
 /** init timeout ms */
 #define SD_INIT_TIMEOUT 2000
 /** erase timeout ms */
@@ -127,6 +142,8 @@ class Sd2Card {
   /** Returns the current value, true or false, for partial block read. */
   uint8_t partialBlockRead(void) const {return partialBlockRead_;}
   uint8_t readBlock(uint32_t block, uint8_t* dst);
+  uint8_t readBlock(uint32_t block, sdBlockWriter writer, void * param);
+  
   uint8_t readData(uint32_t block,
           uint16_t offset, uint16_t count, uint8_t* dst);
   /**
@@ -150,6 +167,8 @@ class Sd2Card {
   /** Return the card type: SD V1, SD V2 or SDHC */
   uint8_t type(void) const {return type_;}
   uint8_t writeBlock(uint32_t blockNumber, const uint8_t* src);
+  uint8_t writeBlock(uint32_t blockNumber, sdBlockReader reader, void * param);
+  uint8_t writeData(uint8_t token, sdBlockReader reader, void * param);
   uint8_t writeData(const uint8_t* src);
   uint8_t writeStart(uint32_t blockNumber, uint32_t eraseCount);
   uint8_t writeStop(void);
