@@ -1,5 +1,6 @@
 /* Arduino Sd2Card Library
  * Copyright (C) 2009 by William Greiman
+ * Simplification by https://github.com/rizsi
  *
  * This file is part of the Arduino Sd2Card Library
  *
@@ -44,7 +45,7 @@ uint8_t Sd2Card::cardCommand(uint8_t cmd, uint32_t arg) {
   chipSelectLow();
 
   // wait up to 300 ms if busy
-  waitNotBusy(300);
+  waitNotBusy(50);
 
   // send command
   spiSend(cmd | 0x40);
@@ -257,12 +258,7 @@ uint8_t Sd2Card::init(uint8_t sckRateID, uint8_t chipSelectPin) {
   }
   chipSelectHigh();
 
-#ifndef SOFTWARE_SPI
   return setSckRate(sckRateID);
-#else  // SOFTWARE_SPI
-  return true;
-#endif  // SOFTWARE_SPI
-
  fail:
   chipSelectHigh();
   return false;

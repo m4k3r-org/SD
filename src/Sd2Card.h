@@ -58,7 +58,7 @@ typedef void (*sdBlockWriter) (uint8_t data, void * param);
 
 //------------------------------------------------------------------------------
 /** init timeout ms */
-#define SD_INIT_TIMEOUT 2000
+#define SD_INIT_TIMEOUT 50
 /** erase timeout ms */
 #define SD_ERASE_TIMEOUT 10000
 /** read timeout ms */
